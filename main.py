@@ -1,62 +1,39 @@
-import os
-from flask import Flask, request
-from twilio.twiml.messaging_response import MessagingResponse
-import requests
+# --- TrackingMore API Setup ---
+url = "https://api.trackingmore.com/v4/trackings/get"
 
-app = Flask(__name__)
+headers = {
+    "Content-Type": "application/json",
+    "Tracking-Api-Key": TRACKING_API_KEY
+}
 
-# REPLACE THIS with your key from Step 1
-TRACKING_API_KEY = "YOUR_TRACKING_API_KEY"
+# --- First try WITH carrier ---
+payload = {
+    "tracking_numbers": [track_num],
+    "courier_code": carrier
+}
 
-@app.route("/whatsapp", methods=['POST'])
-def whatsapp_bot():
-    # 1. Get the message from WhatsApp
-    incoming_msg = request.values.get('Body', '').strip()
-    resp = MessagingResponse()
-    msg = resp.message()
+response = requests.post(url, json=payload, headers=headers, timeout=10).json()
+items = response.get('data', {}).get('items', [])
 
-    try:
-        # 2. Split message (Expected: "DTDC 123456")
-        parts = incoming_msg.split()
-        if len(parts) < 2:
-            msg.body("Welcome! 📦\nSend your tracking like this:\n[Carrier] [Number]\n\nExample: DTDC 123456")
-            return str(resp)
+# --- Fallback: auto-detect ---
+if not items:
+    payload = {
+        "tracking_numbers": [track_num]
+    }
+    response = requests.post(url, json=payload, headers=headers, timeout=10).json()
+    items = response.get('data', {}).get('items', [])
 
-        carrier_input = parts[0].lower()
-        track_num = parts[1]
+# --- Final result ---
+if items:
+    data = items[0]
+    status = data.get('delivery_status', 'Unknown')
+    last_event = data.get('last_event', 'No recent updates')
 
-        # 3. Ask TrackingMore for the status
-        # We use the 'trackings/get' endpoint for v4
-        url = f"https://api.trackingmore.com{track_num}"
-        headers = {
-            "Content-Type": "application/json",
-            "Tracking-Api-Key": TRACKING_API_KEY
-        }
-        
-        response = requests.get(url, headers=headers).json()
-
-        # 4. Parse the result
-        if response.get('meta', {}).get('code') == 200 and response.get('data'):
-            # Get the first result from the data list
-            tracking_info = response['data'][0]
-            status = tracking_info.get('delivery_status', 'Unknown')
-            last_event = tracking_info.get('last_event', 'No details available')
-            
-            output = (
-                f"📦 *Status:* {status.upper()}\n"
-                f"📍 *Latest:* {last_event}\n"
-                f"🔢 *Number:* {track_num}"
-            )
-            msg.body(output)
-        else:
-            msg.body(f"❌ Details for {track_num} not found. Check if the number is correct!")
-
-    except Exception as e:
-        msg.body("⚠️ Service busy. Please try again in a minute.")
-
-    return str(resp)
-
-if __name__ == "__main__":
-    # Render provides a PORT environment variable
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    reply = (
+        f"✅ *Status:* {status.upper()}\n"
+        f"📍 *Last Update:* {last_event}\n"
+        f"🔢 *Number:* {track_num}"
+    )
+    msg.body(reply)
+else:
+    msg.body(f"❌ Could not find tracking info for {track_num}.")
